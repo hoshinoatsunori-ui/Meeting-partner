@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ja"><body>
+<!-- Meet ではない。字幕が書き換わる様子を模した検証用ページ -->
+<div role="region" aria-label="字幕テスト">
+  <div class="speaker">山田</div><div class="caption" id="c1"></div>
+</div>
+<div id="noise">clock</div>
+<script>
+const steps = ["今日は", "今日は会議", "今日は会議の議題を", "今日は会議の議題を確認します", "今日の会議の議題を確認します。"];
+let i = 0;
+const c1 = document.getElementById("c1");
+const timer = setInterval(() => {
+  if (i < steps.length) c1.textContent = steps[i++];
+  else clearInterval(timer);
+}, 300);
+setInterval(() => { document.getElementById("noise").textContent = String(Date.now()); }, 200);
+</script>
+</body></html>

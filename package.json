@@ -1,0 +1,22 @@
+{
+  "name": "meeting-partner",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "AI meeting partner for Google Meet (personal use)",
+  "scripts": {
+    "login": "tsx src/phase0/login.ts",
+    "observe": "tsx src/phase0/observe.ts",
+    "analyze": "tsx src/phase0/analyze.ts",
+    "typecheck": "tsc --noEmit",
+    "test:fake": "tsx test/fake-meet.test.ts"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
