@@ -129,14 +129,36 @@ function round(n: number) {
   return Math.round(n * 10) / 10;
 }
 
-/** プロファイルを使っている Chrome プロセス群の RSS 合計（Linux / macOS） */
+/** プロファイルを使っている Chrome プロセス群のメモリ合計（MB） */
 function browserRssMB(): number | null {
-  if (process.platform === "win32") return null;
+  const profile = DEFAULT_PROFILE_DIR.toLowerCase();
   try {
+    if (process.platform === "win32") {
+      // Windows: 全 chrome.exe のコマンドラインと WorkingSet を取得し、プロファイルで絞る
+      const out = execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object CommandLine,WorkingSetSize | ConvertTo-Json -Compress",
+        ],
+        { encoding: "utf8" },
+      );
+      const parsed = JSON.parse(out || "[]") as
+        | { CommandLine: string | null; WorkingSetSize: number }
+        | { CommandLine: string | null; WorkingSetSize: number }[];
+      const procs = Array.isArray(parsed) ? parsed : [parsed];
+      let bytes = 0;
+      for (const p of procs) {
+        if ((p.CommandLine ?? "").toLowerCase().includes(profile)) bytes += Number(p.WorkingSetSize) || 0;
+      }
+      return round(bytes / 1024 / 1024);
+    }
+    // Linux / macOS: ps の RSS（KB）
     const out = execFileSync("ps", ["-axo", "rss=,command="], { encoding: "utf8" });
     let kb = 0;
     for (const line of out.split("\n")) {
-      if (!line.includes(DEFAULT_PROFILE_DIR)) continue;
+      if (!line.toLowerCase().includes(profile)) continue;
       kb += Number(line.trim().split(/\s+/)[0]) || 0;
     }
     return round(kb / 1024);

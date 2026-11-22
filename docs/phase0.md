@@ -4,7 +4,7 @@
 項目 5〜7（チャット、カメラ差し替え、Docs）は第2弾以降。
 
 ## 必要なもの
-- 自宅 PC（Linux / macOS。Windows はリソース計測の RSS 値が取れない）
+- 自宅 PC（Windows / Linux / macOS。Windows のメモリ計測は PowerShell を使う。Windows 実機では未検証）
 - Node.js 22 以上
 - Google Chrome（インストール済みのもの。スクリプトは `channel: "chrome"` で起動する）
 - ボット専用 Google アカウント（リカバリ用メール・電話番号はメインアカウントと分ける）
@@ -27,7 +27,7 @@ npm run observe -- https://meet.google.com/xxx-xxxx-xxx --minutes 30 --auto
 ```
 - ボットの参加リクエストは、メインアカウント側で承認する。
 - 字幕が表示されている時にターミナルで **Enter** を押すと、HTML とスクリーンショットを保存する。
-- ディスプレイの無い Linux 機では `xvfb-run -a npm run observe -- ...` で実行する。
+- Windows / デスクトップ環境では Xvfb は不要。ディスプレイの無い Linux 機では `xvfb-run -a npm run observe -- ...` で実行する。
 
 ### 話す内容の例（項目 3・4 用）
 - 普通の会話を数分
