@@ -5,10 +5,14 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 
-const url = "file://" + path.resolve("test/fake-meet.html");
-const out = execFileSync("npx", ["tsx", "src/phase0/observe.ts", url, "--minutes", "0.05"], {
+const url = pathToFileURL(path.resolve("test/fake-meet.html")).href;
+// Windows では npx が npx.cmd なので execFileSync("npx") は ENOENT になる。
+// 実行中の node に tsx ローダーを読み込ませて起動する（全 OS 共通）。
+const tsx = (script: string, args: string[]) => [process.execPath, ["--import", "tsx", script, ...args]] as const;
+const out = execFileSync(...tsx("src/phase0/observe.ts", [url, "--minutes", "0.05"]), {
   encoding: "utf8",
   env: { ...process.env, MP_HEADLESS: "1" },
   input: "",
@@ -25,7 +29,7 @@ assert.ok(!recs.some((r) => /^\d+$/.test(r.text)), "日本語を含まないテ�
 const ids = new Set(caption.map((r) => r.id));
 assert.ok(ids.size >= 1, "字幕要素に id が振られること");
 
-const analysis = execFileSync("npx", ["tsx", "src/phase0/analyze.ts", dir, "--path", "字幕テスト"], { encoding: "utf8" });
+const analysis = execFileSync(...tsx("src/phase0/analyze.ts", [dir, "--path", "字幕テスト"]), { encoding: "utf8" });
 assert.match(analysis, /書き換え [1-9]/, "途中の書き換えを検出すること");
 assert.match(analysis, /追記 [1-9]/, "追記を検出すること");
 console.log(analysis);

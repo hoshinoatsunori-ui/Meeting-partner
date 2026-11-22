@@ -68,6 +68,11 @@ function detail(filter: string) {
   const gaps: number[] = [];
   const lifetimes: number[] = [];
   const kinds = { append: 0, rewrite: 0, shrink: 0 };
+  // 書き換えが「末尾から何文字前」まで及んだか（= 前回テキストのうち変わった部分の長さ）。
+  // これが小さければ、末尾 N 文字より前は確定済みとみなせる。
+  const editDepths: number[] = [];
+  // 先頭が削られた回数（長いブロックで古い部分が消える / ブロックが作り直される）
+  let headCut = 0;
 
   console.log(`対象 ${target.length} 件 / 要素 ${byId.size} 個\n`);
   let shown = 0;
@@ -84,6 +89,14 @@ function detail(filter: string) {
         else if (cur.text.length < prev.length) kind = "shrink";
         else kind = "rewrite";
         kinds[kind as keyof typeof kinds]++;
+        const head = prev.slice(0, 10);
+        if (!cur.text.startsWith(head)) {
+          headCut++;
+        } else {
+          let k = 0;
+          while (k < prev.length && k < cur.text.length && prev[k] === cur.text[k]) k++;
+          editDepths.push(prev.length - k);
+        }
       }
       if (shown < 10) {
         const sec = ((cur.t - t0) / 1000).toFixed(1).padStart(7);
@@ -96,6 +109,8 @@ function detail(filter: string) {
 
   console.log("\n=== 統計 ===");
   console.log(`変化の種類: 追記 ${kinds.append} / 書き換え ${kinds.rewrite} / 短縮 ${kinds.shrink}`);
+  console.log(`書き換えの深さ(末尾から何文字前まで変わったか): ${percentiles(editDepths)}`);
+  console.log(`先頭が変わった回数（古い部分の削除・ブロックの作り直し）: ${headCut}`);
   console.log(`更新間隔(ms): ${percentiles(gaps)}`);
   console.log(`ブロック寿命(ms): ${percentiles(lifetimes)}`);
   console.log("→ 更新間隔の p90〜p99 あたりが「この時間更新が無ければ確定」の目安になる。");
@@ -111,7 +126,7 @@ function printMetrics() {
   console.log("\n=== リソース（60秒ごと）===");
   for (const m of metrics) {
     const min = ((m.t - metrics[0].t) / 60000).toFixed(0).padStart(4);
-    console.log(`${min}分  Chrome合計RSS ${m.browserRssMB ?? "-"} MB / JSヒープ ${m.jsHeapUsedMB} MB`);
+    console.log(`${min}分  Chrome合計メモリ ${m.browserRssMB ?? "-"} MB（Windows はプライベートバイト、他は RSS） / JSヒープ ${m.jsHeapUsedMB} MB`);
   }
 }
 

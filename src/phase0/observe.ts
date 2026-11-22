@@ -1,11 +1,13 @@
 /**
  * Phase 0 / 検証項目 1・2・3・8: Meet に参加し、字幕の書き換わりを記録する。
  *
- *   npm run observe -- <MeetのURL> [--minutes 60] [--all] [--auto]
+ *   npm run observe -- <MeetのURL> [--minutes 60] [--all] [--auto] [--snap-every 60]
  *
  *   --minutes N  N 分で自動終了（既定: ブラウザを閉じるか Ctrl+C まで）
  *   --all        日本語を含まないテキストも記録する（既定は日本語のみ）
  *   --auto       参加ボタンと字幕 ON の自動操作を試す（結果は events.jsonl に記録）
+ *   --snap-every S  S 秒ごとに HTML とスクリーンショットを自動保存する
+ *                   （Enter を押せない環境（別プロセスから起動した時など）向け）
  *
  * 実行中にターミナルで Enter を押すと、その時点の HTML とスクリーンショットを保存する
  * （字幕が表示されている時に押すと、字幕部分の DOM 構造を後から調べられる）。
@@ -25,12 +27,15 @@ import { installRecorder, type RecorderOptions } from "./inject.js";
 
 // ---- 引数 ----
 const args = process.argv.slice(2);
-const url = args.find((a) => !a.startsWith("--"));
+// オプションの値（--minutes 30 の 30 など）を URL と取り違えないよう、http/file で始まるものを URL とする
+const url = args.find((a) => /^(https?|file):/.test(a));
 const flag = (name: string) => args.includes(name);
 const minutesIdx = args.indexOf("--minutes");
 const minutes = minutesIdx >= 0 ? Number(args[minutesIdx + 1]) : 0;
+const snapIdx = args.indexOf("--snap-every");
+const snapEverySec = snapIdx >= 0 ? Number(args[snapIdx + 1]) : 0;
 if (!url) {
-  console.error("使い方: npm run observe -- <MeetのURL> [--minutes 60] [--all] [--auto]");
+  console.error("使い方: npm run observe -- <MeetのURL> [--minutes 60] [--all] [--auto] [--snap-every 60]");
   process.exit(1);
 }
 
@@ -76,17 +81,19 @@ console.log("字幕が出ている時に Enter を押すと HTML とスクリー
 // ---- スナップショット（Enter）----
 let snapNo = 0;
 const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", async () => {
+const snapshot = async (trigger: string) => {
   snapNo++;
   const base = path.join(outDir, `snapshot-${snapNo}`);
   try {
     fs.writeFileSync(`${base}.html`, await page.content());
     await page.screenshot({ path: `${base}.png` });
-    event("snapshot", { file: `${base}.html` });
+    event("snapshot", { file: `${base}.html`, trigger });
   } catch (e) {
-    event("snapshot-failed", { error: String(e) });
+    event("snapshot-failed", { error: String(e), trigger });
   }
-});
+};
+rl.on("line", () => void snapshot("enter"));
+const snapTimer = snapEverySec > 0 ? setInterval(() => void snapshot("timer"), snapEverySec * 1000) : undefined;
 
 // ---- リソース計測（検証項目 8）: 60 秒ごと ----
 const cdp = await ctx.newCDPSession(page);
@@ -98,7 +105,7 @@ const metricsTimer = setInterval(async () => {
     event("metrics", {
       jsHeapUsedMB: round(m.JSHeapUsedSize / 1e6),
       domNodes: m.Nodes,
-      browserRssMB: browserRssMB(),
+      ...browserMemory(),
       mutationsSoFar: mutationCount,
     });
   } catch (e) {
@@ -112,6 +119,7 @@ const finish = async (reason: string) => {
   if (closing) return;
   closing = true;
   clearInterval(metricsTimer);
+  clearInterval(snapTimer);
   rl.close();
   event("end", { reason, mutations: mutationCount });
   await ctx.close().catch(() => {});
@@ -129,41 +137,55 @@ function round(n: number) {
   return Math.round(n * 10) / 10;
 }
 
-/** プロファイルを使っている Chrome プロセス群のメモリ合計（MB） */
-function browserRssMB(): number | null {
+/**
+ * プロファイルを使っている Chrome プロセス群のメモリ合計（MB）。
+ * - Windows: browserRssMB = プライベートバイト（PrivatePageCount）の合計。
+ *   WorkingSet は chrome.dll 等の共有ページを各プロセスが重複して含む（1 プロセス約 300MB）ため、
+ *   合計すると実使用量の 10 倍近くになり、増加傾向も見えにくい。参考値として browserWorkingSetSumMB に残す。
+ * - Linux / macOS: ps の RSS 合計（共有ページの重複を多少含む）。
+ */
+function browserMemory(): { browserRssMB: number | null; browserWorkingSetSumMB?: number; chromeProcs?: number } {
   const profile = DEFAULT_PROFILE_DIR.toLowerCase();
   try {
     if (process.platform === "win32") {
-      // Windows: 全 chrome.exe のコマンドラインと WorkingSet を取得し、プロファイルで絞る
       const out = execFileSync(
         "powershell",
         [
           "-NoProfile",
           "-Command",
-          "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object CommandLine,WorkingSetSize | ConvertTo-Json -Compress",
+          "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object CommandLine,WorkingSetSize,PrivatePageCount | ConvertTo-Json -Compress",
         ],
-        { encoding: "utf8" },
+        { encoding: "utf8", windowsHide: true },
       );
-      const parsed = JSON.parse(out || "[]") as
-        | { CommandLine: string | null; WorkingSetSize: number }
-        | { CommandLine: string | null; WorkingSetSize: number }[];
-      const procs = Array.isArray(parsed) ? parsed : [parsed];
-      let bytes = 0;
+      type Proc = { CommandLine: string | null; WorkingSetSize: number; PrivatePageCount: number };
+      const parsed = JSON.parse(out.trim() || "[]") as Proc | Proc[];
+      const procs = (Array.isArray(parsed) ? parsed : [parsed]).filter((p) =>
+        (p.CommandLine ?? "").toLowerCase().includes(profile),
+      );
+      let priv = 0;
+      let ws = 0;
       for (const p of procs) {
-        if ((p.CommandLine ?? "").toLowerCase().includes(profile)) bytes += Number(p.WorkingSetSize) || 0;
+        priv += Number(p.PrivatePageCount) || 0;
+        ws += Number(p.WorkingSetSize) || 0;
       }
-      return round(bytes / 1024 / 1024);
+      return {
+        browserRssMB: round(priv / 1024 / 1024),
+        browserWorkingSetSumMB: round(ws / 1024 / 1024),
+        chromeProcs: procs.length,
+      };
     }
     // Linux / macOS: ps の RSS（KB）
     const out = execFileSync("ps", ["-axo", "rss=,command="], { encoding: "utf8" });
     let kb = 0;
+    let n = 0;
     for (const line of out.split("\n")) {
       if (!line.toLowerCase().includes(profile)) continue;
       kb += Number(line.trim().split(/\s+/)[0]) || 0;
+      n++;
     }
-    return round(kb / 1024);
+    return { browserRssMB: round(kb / 1024), chromeProcs: n };
   } catch {
-    return null;
+    return { browserRssMB: null };
   }
 }
 
@@ -197,14 +219,31 @@ async function tryAutoJoin(p: Page) {
 async function tryCaptionsOn(p: Page) {
   // 入室完了を待つ（参加承認待ちの時間を見込んで長め）
   await p.waitForTimeout(5_000);
-  const btn = p.getByRole("button", { name: /字幕をオン|Turn on captions/i });
-  try {
-    await btn.first().waitFor({ state: "visible", timeout: 120_000 });
-    await btn.first().click();
-    event("auto-captions", { ok: true, method: "button" });
-    return;
-  } catch {
-    // ショートカットへ
+  // 2026-11 実機（Windows / 日本語 UI）: 入室時の字幕は OFF。
+  // 操作バーの「字幕と翻訳」(translate_cc) を開くと、その中に「字幕をオンにする」がある。
+  // UI によっては操作バーに直接「字幕をオンにする」が出る可能性もあるので両方を試す。
+  const onBtn = p.getByRole("button", { name: /字幕をオン|Turn on captions/i }).first();
+  const menuBtn = p.getByRole("button", { name: /^字幕と翻訳$|Captions and translation/i }).first();
+  const deadline = Date.now() + 120_000; // 参加承認待ちを見込んで長め
+  while (Date.now() < deadline) {
+    try {
+      if (await onBtn.isVisible()) {
+        await onBtn.click();
+        event("auto-captions", { ok: true, method: "button" });
+        return;
+      }
+      if (await menuBtn.isVisible()) {
+        await menuBtn.click();
+        await onBtn.waitFor({ state: "visible", timeout: 5_000 });
+        await onBtn.click();
+        event("auto-captions", { ok: true, method: "menu" });
+        await p.keyboard.press("Escape").catch(() => {});
+        return;
+      }
+    } catch {
+      // 表示が変わった直後などは次の周回で再試行
+    }
+    await p.waitForTimeout(1_000);
   }
   await p.keyboard.press("c");
   event("auto-captions", {
