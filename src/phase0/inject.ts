@@ -72,7 +72,9 @@ export function installRecorder(opts: RecorderOptions): void {
       const raw = (el as HTMLElement).innerText ?? el.textContent ?? "";
       const text = raw.trim().slice(0, opts.maxTextLength);
       if (!text) continue;
-      if (opts.japaneseOnly && !JA.test(text)) continue;
+      // 字幕 region 内は日本語を含まなくても記録する（英字の話者名 "test" などが落ちないように。2026-11-23 実機で確認）
+      const inCaptions = !!el.closest('[role="region"][aria-label="字幕"], [role="region"][aria-label="Captions"]');
+      if (opts.japaneseOnly && !inCaptions && !JA.test(text)) continue;
       if (lastText.get(el) === text) continue;
       lastText.set(el, text);
       batch.push({ t: now, id: idOf(el), path: describe(el), text });
