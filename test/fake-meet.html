@@ -1,18 +1,69 @@
 <!doctype html>
 <html lang="ja"><body>
-<!-- Meet ではない。字幕が書き換わる様子を模した検証用ページ -->
+<!-- Meet ではない。字幕が書き換わる様子と、参加・マイク/カメラ・会議終了の操作を模した検証用ページ。
+     ?auto=1   参加ボタン・マイク/カメラボタン・「字幕と翻訳」メニューを出す（参加→字幕 ON で字幕が始まる）
+     ?end=N    N 秒後に「この会議は終了しました」を表示する -->
+<div id="controls"></div>
+<div id="status"></div>
 <div role="region" aria-label="字幕テスト">
   <div class="speaker">山田</div><div class="caption" id="c1"></div>
 </div>
 <div id="noise">clock</div>
 <script>
-const steps = ["今日は", "今日は会議", "今日は会議の議題を", "今日は会議の議題を確認します", "今日の会議の議題を確認します。"];
-let i = 0;
-const c1 = document.getElementById("c1");
-const timer = setInterval(() => {
-  if (i < steps.length) c1.textContent = steps[i++];
-  else clearInterval(timer);
-}, 300);
+const params = new URLSearchParams(location.search);
+const controls = document.getElementById("controls");
+const status = document.getElementById("status");
+
+function startCaptions() {
+  const steps = ["今日は", "今日は会議", "今日は会議の議題を", "今日は会議の議題を確認します", "今日の会議の議題を確認します。"];
+  let i = 0;
+  const c1 = document.getElementById("c1");
+  const timer = setInterval(() => {
+    if (i < steps.length) c1.textContent = steps[i++];
+    else clearInterval(timer);
+  }, 300);
+}
+
+/** 押すたびに表記が「オフにする」⇔「オンにする」に変わるトグル（Meet と同じく現在の状態の逆を表示） */
+function toggle(label) {
+  const b = document.createElement("button");
+  let on = true;
+  const render = () => b.setAttribute("aria-label", `${label}を${on ? "オフ" : "オン"}にする（テスト）`);
+  render();
+  b.textContent = label;
+  b.onclick = () => { on = !on; render(); status.textContent = `${label}: ${on ? "オン" : "オフ"}`; };
+  controls.append(b);
+}
+
+if (params.get("auto") === "1") {
+  toggle("マイク");
+  toggle("カメラ");
+  const join = document.createElement("button");
+  join.textContent = "今すぐ参加";
+  join.onclick = () => {
+    join.remove();
+    status.textContent = "参加しました";
+    const menu = document.createElement("button");
+    menu.textContent = "字幕と翻訳";
+    menu.onclick = () => {
+      const on = document.createElement("button");
+      on.textContent = "字幕をオンにする";
+      on.onclick = () => { on.remove(); status.textContent = "字幕オン"; startCaptions(); };
+      controls.append(on);
+    };
+    controls.append(menu);
+  };
+  controls.append(join);
+} else {
+  startCaptions();
+}
+
+if (params.has("end")) {
+  setTimeout(() => {
+    document.body.insertAdjacentHTML("beforeend", "<h1>この会議は終了しました</h1>");
+  }, Number(params.get("end")) * 1000);
+}
+
 setInterval(() => { document.getElementById("noise").textContent = String(Date.now()); }, 200);
 </script>
 </body></html>

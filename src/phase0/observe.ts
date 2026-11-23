@@ -5,9 +5,11 @@
  *
  *   --minutes N  N 分で自動終了（既定: ブラウザを閉じるか Ctrl+C まで）
  *   --all        日本語を含まないテキストも記録する（既定は日本語のみ）
- *   --auto       参加ボタンと字幕 ON の自動操作を試す（結果は events.jsonl に記録）
+ *   --auto       マイク・カメラ OFF → 参加ボタン → 字幕 ON を自動で行う（結果は events.jsonl に記録）
  *   --snap-every S  S 秒ごとに HTML とスクリーンショットを自動保存する
  *                   （Enter を押せない環境（別プロセスから起動した時など）向け）
+ *
+ * 会議の終了（「この会議は終了しました」・退出・削除・ホーム画面への移動）を検知すると自動で終了する。
  *
  * 実行中にターミナルで Enter を押すと、その時点の HTML とスクリーンショットを保存する
  * （字幕が表示されている時に押すと、字幕部分の DOM 構造を後から調べられる）。
@@ -38,6 +40,8 @@ if (!url) {
   console.error("使い方: npm run observe -- <MeetのURL> [--minutes 60] [--all] [--auto] [--snap-every 60]");
   process.exit(1);
 }
+/** 会議の URL のパス（/xxx-xxxx-xxx）。ここから外れたら会議を離れたとみなす */
+const meetingPath = new URL(url).pathname;
 
 // ---- 出力先 ----
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -73,6 +77,8 @@ await page.goto(url);
 if (flag("--auto")) {
   await tryAutoJoin(page);
   await tryCaptionsOn(page);
+  // 入室前に OFF にできなかった場合に備えて、入室後にも確認する
+  await muteSelf(page, "in-call");
 } else {
   console.log("\nブラウザで手動で参加し、字幕を ON・日本語にしてください。");
 }
@@ -120,6 +126,7 @@ const finish = async (reason: string) => {
   closing = true;
   clearInterval(metricsTimer);
   clearInterval(snapTimer);
+  clearInterval(endTimer);
   rl.close();
   event("end", { reason, mutations: mutationCount });
   await ctx.close().catch(() => {});
@@ -129,6 +136,13 @@ const finish = async (reason: string) => {
   process.exit(0);
 };
 ctx.on("close", () => void finish("browser-closed"));
+// 会議の終了を 3 秒ごとに確認する
+const endTimer = setInterval(async () => {
+  const reason = await detectMeetingEnd(page).catch(() => null);
+  if (!reason) return;
+  event("meeting-ended", { detail: reason });
+  void finish("meeting-ended");
+}, 3_000);
 process.on("SIGINT", () => void finish("ctrl-c"));
 if (minutes > 0) setTimeout(() => void finish(`timeout-${minutes}min`), minutes * 60_000);
 
@@ -190,24 +204,76 @@ function browserMemory(): { browserRssMB: number | null; browserWorkingSetSumMB?
 }
 
 /**
- * 参加ボタンを押す。ボタンの表記は UI 言語・状況で変わるため候補を順に試す。
- * 表記は未検証の想定なので、失敗したらスクリーンショットを見て候補を直す。
+ * 参加ボタンを押す。ボタンの表記は UI 言語・状況で変わるため候補をまとめて待つ。
+ * 実機（2026-11, 日本語 UI）: 招待済み・アクセス「オープン」等では「今すぐ参加」、
+ * アクセス「制限付き」では「参加をリクエスト」（主催者の承認待ちになる）。
+ * 押す前にマイク・カメラを OFF にする（ボットの PC の音・映像を会議に流さないため）。
  */
 async function tryAutoJoin(p: Page) {
-  const candidates = [/今すぐ参加/, /参加をリクエスト/, /Join now/i, /Ask to join/i];
-  for (const name of candidates) {
-    const btn = p.getByRole("button", { name });
+  const joinBtn = p.getByRole("button", { name: /今すぐ参加|参加をリクエスト|Join now|Ask to join/i }).first();
+  try {
+    await joinBtn.waitFor({ state: "visible", timeout: 30_000 });
+  } catch {
+    event("auto-join", { ok: false, note: "参加ボタンが見つからない。手動で参加してください" });
+    await p.screenshot({ path: path.join(outDir, "auto-join-failed.png") }).catch(() => {});
+    return;
+  }
+  await muteSelf(p, "pre-join");
+  const matched = (await joinBtn.innerText().catch(() => "")).trim();
+  await joinBtn.click();
+  event("auto-join", { ok: true, matched });
+}
+
+/**
+ * マイクとカメラを OFF にする。
+ * Meet のボタン名は現在の状態の逆（ON の時は「マイクをオフにする（Ctrl+D キー）」、
+ * OFF の時は「マイクをオンにする」）なので、「オフにする」ボタンがある時だけ押す。
+ * トグルのショートカット（Ctrl+D / Ctrl+E）は状態が分からないと逆効果になるので使わない。
+ */
+async function muteSelf(p: Page, phase: "pre-join" | "in-call") {
+  const targets = [
+    { kind: "mic", off: /^マイクをオフにする|^Turn off microphone/i, on: /^マイクをオンにする|^Turn on microphone/i },
+    { kind: "camera", off: /^カメラをオフにする|^Turn off camera/i, on: /^カメラをオンにする|^Turn on camera/i },
+  ];
+  const result: Record<string, string> = {};
+  for (const t of targets) {
+    const offBtn = p.getByRole("button", { name: t.off }).first();
+    const onBtn = p.getByRole("button", { name: t.on }).first();
     try {
-      await btn.first().waitFor({ state: "visible", timeout: 15_000 });
-      await btn.first().click();
-      event("auto-join", { ok: true, matched: String(name) });
-      return;
-    } catch {
-      // 次の候補へ
+      if (await offBtn.isVisible()) {
+        await offBtn.click();
+        await onBtn.waitFor({ state: "visible", timeout: 3_000 });
+        result[t.kind] = "turned-off";
+      } else if (await onBtn.isVisible()) {
+        result[t.kind] = "already-off";
+      } else {
+        result[t.kind] = "button-not-found";
+      }
+    } catch (e) {
+      result[t.kind] = `failed: ${String(e).slice(0, 80)}`;
     }
   }
-  event("auto-join", { ok: false, note: "候補のボタンが見つからない。手動で参加してください" });
-  await p.screenshot({ path: path.join(outDir, "auto-join-failed.png") }).catch(() => {});
+  const ok = Object.values(result).every((v) => v === "turned-off" || v === "already-off");
+  event("auto-mute", { phase, ok, ...result });
+}
+
+/**
+ * 会議が終わったかを調べる。終わっていれば理由（文字列）、続いていれば null。
+ * - 画面の表示: 2026-11 実機で「この会議は終了しました」→ 60 秒後に Meet のホーム画面へ移動を確認。
+ *   退出・削除の表記は未確認の想定。
+ * - URL: 会議コードを含まない URL（ホーム画面など）に移った
+ */
+async function detectMeetingEnd(p: Page): Promise<string | null> {
+  if (p.isClosed()) return null; // ブラウザ終了は ctx の close で扱う
+  const current = new URL(p.url());
+  if (!current.pathname.startsWith(meetingPath)) return `url-changed: ${current.origin}${current.pathname}`;
+  const ended = p
+    .getByText(
+      /この会議は終了しました|通話から退出しました|会議から退出しました|ミーティングから退出しました|会議から削除されました|The meeting has ended|You left the meeting|You've left the call|You've been removed/i,
+    )
+    .first();
+  if (await ended.isVisible()) return `text: ${(await ended.innerText()).split("\n")[0].slice(0, 40)}`;
+  return null;
 }
 
 /**
