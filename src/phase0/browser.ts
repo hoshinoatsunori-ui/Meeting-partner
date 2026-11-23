@@ -19,5 +19,8 @@ export async function launchBot(profileDir = DEFAULT_PROFILE_DIR): Promise<Brows
     ...(executablePath ? { executablePath } : { channel: "chrome" }),
     viewport: null,
     locale: "ja-JP",
+    // Playwright は既定で --no-sandbox を付けて起動する（Chrome に「サポートされていないコマンドライン フラグ」
+    // の警告が出る）。サンドボックスを無効にしたまま Web ページを開かないよう、有効にする。
+    chromiumSandbox: true,
   });
 }
