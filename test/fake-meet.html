@@ -34,8 +34,21 @@ function toggle(label) {
   };
   render();
   b.textContent = label;
-  b.onclick = () => { on = !on; render(); status.textContent = `${label}: ${on ? "オン" : "オフ"}`; };
+  b.onclick = () => {
+    on = !on; render(); status.textContent = `${label}: ${on ? "オン" : "オフ"}`;
+    if (label === "マイク") showNotifyDialog();
+  };
   controls.append(b);
+}
+
+/** 実機（2026-11-23）でマイク OFF の直後に出て参加ボタンを覆ったダイアログを模す */
+function showNotifyDialog() {
+  if (document.getElementById("notify")) return;
+  document.body.insertAdjacentHTML("beforeend",
+    '<div id="notify" role="dialog" aria-label="Meet からデスクトップ通知を受け取る" ' +
+    'style="position:fixed;inset:0;background:rgba(255,255,255,.9)">' +
+    '<p>通知を許可すると…</p><button id="later">後で</button><button>通知を許可</button></div>');
+  document.getElementById("later").onclick = () => document.getElementById("notify").remove();
 }
 
 if (params.get("auto") === "1") {

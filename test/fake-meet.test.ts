@@ -56,6 +56,7 @@ assert.equal(preJoin?.ok, true, "入室前にマイク・カメラを OFF にで
 assert.equal(preJoin?.mic, "turned-off");
 assert.equal(preJoin?.camera, "turned-off");
 assert.equal(ev("auto-mute").find((e) => e.phase === "in-call")?.mic, "already-off", "入室後の確認で OFF のままであること");
+assert.equal(ev("popup-dismissed").length, 1, "参加ボタンを覆う通知ダイアログを閉じること");
 assert.equal(ev("auto-join")[0]?.ok, true, "参加ボタンを押せること");
 assert.equal(ev("auto-captions")[0]?.ok, true, "字幕と翻訳メニューから字幕を ON にできること");
 assert.equal(ev("meeting-ended").length, 1, "会議の終了を検知すること");

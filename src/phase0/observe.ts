@@ -220,8 +220,36 @@ async function tryAutoJoin(p: Page) {
   }
   await muteSelf(p, "pre-join");
   const matched = (await joinBtn.innerText().catch(() => "")).trim();
-  await joinBtn.click();
-  event("auto-join", { ok: true, matched });
+  // 実機（2026-11-23）: マイク/カメラを OFF にした直後に「Meet からデスクトップ通知を受け取る」ダイアログが
+  // 参加ボタンの上に出てクリックを妨げた。閉じてから押し、失敗しても 1 回だけやり直す。
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await dismissPopups(p);
+    try {
+      await joinBtn.click({ timeout: 10_000 });
+      event("auto-join", { ok: true, matched, attempt });
+      return;
+    } catch (e) {
+      if (attempt === 2) {
+        event("auto-join", { ok: false, matched, note: "クリックできない。手動で参加してください", error: String(e).slice(0, 200) });
+        await p.screenshot({ path: path.join(outDir, "auto-join-failed.png") }).catch(() => {});
+      }
+    }
+  }
+}
+
+/** 操作の邪魔になるダイアログ（デスクトップ通知の案内など）を閉じる */
+async function dismissPopups(p: Page) {
+  const notify = p.getByRole("dialog", { name: /デスクトップ通知|desktop notifications/i });
+  try {
+    if (await notify.isVisible()) {
+      const later = notify.getByRole("button", { name: /^後で$|^Not now$/i }).first();
+      if (await later.isVisible()) await later.click({ timeout: 3_000 });
+      else await p.keyboard.press("Escape");
+      event("popup-dismissed", { popup: "desktop-notifications" });
+    }
+  } catch {
+    await p.keyboard.press("Escape").catch(() => {});
+  }
 }
 
 /**
@@ -247,7 +275,8 @@ async function muteSelf(p: Page, phase: "pre-join" | "in-call") {
         result[t.kind] = "already-off";
         continue;
       }
-      await target.click();
+      await dismissPopups(p); // 通知ダイアログがボタンを覆うことがある
+      await target.click({ timeout: 5_000 });
       await p.waitForFunction(
         (el) => el?.getAttribute("data-is-muted") === "true",
         await target.elementHandle(),
