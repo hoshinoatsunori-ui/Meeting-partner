@@ -226,31 +226,38 @@ async function tryAutoJoin(p: Page) {
 
 /**
  * マイクとカメラを OFF にする。
- * Meet のボタン名は現在の状態の逆（ON の時は「マイクをオフにする（Ctrl+D キー）」、
- * OFF の時は「マイクをオンにする」）なので、「オフにする」ボタンがある時だけ押す。
+ * 実機（2026-11-23, 日本語 UI）のボタン: <button aria-label="マイクをオフ" data-is-muted="false">
+ * （カメラは aria-label="カメラをオフ"）。表示されるツールチップ「マイクをオフにする（Ctrl+D キー）」とは
+ * 名前が違うので、名前ではなく data-is-muted 属性で状態を見る。
  * トグルのショートカット（Ctrl+D / Ctrl+E）は状態が分からないと逆効果になるので使わない。
  */
 async function muteSelf(p: Page, phase: "pre-join" | "in-call") {
   const targets = [
-    { kind: "mic", off: /^マイクをオフにする|^Turn off microphone/i, on: /^マイクをオンにする|^Turn on microphone/i },
-    { kind: "camera", off: /^カメラをオフにする|^Turn off camera/i, on: /^カメラをオンにする|^Turn on camera/i },
+    // 「マイクをオフ」「マイクをオンにする」等。他の参加者の「〜さんのマイクを…」に当たらないよう先頭一致にする
+    { kind: "mic", label: /^マイクをオ|^Turn (on|off) microphone/i },
+    { kind: "camera", label: /^カメラをオ|^Turn (on|off) camera/i },
   ];
   const result: Record<string, string> = {};
   for (const t of targets) {
-    const offBtn = p.getByRole("button", { name: t.off }).first();
-    const onBtn = p.getByRole("button", { name: t.on }).first();
+    const btn = p.locator("button[data-is-muted]").and(p.getByRole("button", { name: t.label }));
     try {
-      if (await offBtn.isVisible()) {
-        await offBtn.click();
-        await onBtn.waitFor({ state: "visible", timeout: 3_000 });
-        result[t.kind] = "turned-off";
-      } else if (await onBtn.isVisible()) {
+      const target = btn.first();
+      await target.waitFor({ state: "visible", timeout: 10_000 });
+      if ((await target.getAttribute("data-is-muted")) === "true") {
         result[t.kind] = "already-off";
-      } else {
-        result[t.kind] = "button-not-found";
+        continue;
       }
+      await target.click();
+      await p.waitForFunction(
+        (el) => el?.getAttribute("data-is-muted") === "true",
+        await target.elementHandle(),
+        { timeout: 3_000 },
+      );
+      result[t.kind] = "turned-off";
     } catch (e) {
-      result[t.kind] = `failed: ${String(e).slice(0, 80)}`;
+      result[t.kind] = /Timeout.*waitFor|waiting for locator/i.test(String(e))
+        ? "button-not-found"
+        : `failed: ${String(e).slice(0, 80)}`;
     }
   }
   const ok = Object.values(result).every((v) => v === "turned-off" || v === "already-off");
@@ -259,8 +266,9 @@ async function muteSelf(p: Page, phase: "pre-join" | "in-call") {
 
 /**
  * 会議が終わったかを調べる。終わっていれば理由（文字列）、続いていれば null。
- * - 画面の表示: 2026-11 実機で「この会議は終了しました」→ 60 秒後に Meet のホーム画面へ移動を確認。
- *   退出・削除の表記は未確認の想定。
+ * - 画面の表示: 2026-11 実機で「この会議は終了しました」「主催者が会議を終了して全員を退出させました」
+ *   → 60 秒のカウントダウン（「ホーム画面に戻ります」）→ Meet のホーム画面へ移動を確認。
+ *   自分で退出した時・削除された時の表記は未確認の想定。
  * - URL: 会議コードを含まない URL（ホーム画面など）に移った
  */
 async function detectMeetingEnd(p: Page): Promise<string | null> {
@@ -269,7 +277,9 @@ async function detectMeetingEnd(p: Page): Promise<string | null> {
   if (!current.pathname.startsWith(meetingPath)) return `url-changed: ${current.origin}${current.pathname}`;
   const ended = p
     .getByText(
-      /この会議は終了しました|通話から退出しました|会議から退出しました|ミーティングから退出しました|会議から削除されました|The meeting has ended|You left the meeting|You've left the call|You've been removed/i,
+      // 実機で確認: 「この会議は終了しました」（時間制限）、「主催者が会議を終了して全員を退出させました」、
+      // どちらの終了画面にも出る「ホーム画面に戻ります」（カウントダウン）。その他は未確認の想定。
+      /この会議は終了しました|全員を退出させました|ホーム画面に戻ります|通話から退出しました|会議から退出しました|ミーティングから退出しました|会議から削除されました|The meeting has ended|You left the meeting|You've left the call|You've been removed|Returning to home screen/i,
     )
     .first();
   if (await ended.isVisible()) return `text: ${(await ended.innerText()).split("\n")[0].slice(0, 40)}`;

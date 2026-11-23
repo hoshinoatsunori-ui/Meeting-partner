@@ -24,11 +24,14 @@ function startCaptions() {
   }, 300);
 }
 
-/** 押すたびに表記が「オフにする」⇔「オンにする」に変わるトグル（Meet と同じく現在の状態の逆を表示） */
+/** 実機（2026-11-23）と同じ形のトグル: <button aria-label="マイクをオフ" data-is-muted="false"> */
 function toggle(label) {
   const b = document.createElement("button");
   let on = true;
-  const render = () => b.setAttribute("aria-label", `${label}を${on ? "オフ" : "オン"}にする（テスト）`);
+  const render = () => {
+    b.setAttribute("aria-label", `${label}を${on ? "オフ" : "オン"}`);
+    b.setAttribute("data-is-muted", String(!on));
+  };
   render();
   b.textContent = label;
   b.onclick = () => { on = !on; render(); status.textContent = `${label}: ${on ? "オン" : "オフ"}`; };
