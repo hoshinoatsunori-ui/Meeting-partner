@@ -9,7 +9,10 @@
     "observe": "tsx src/phase0/observe.ts",
     "analyze": "tsx src/phase0/analyze.ts",
     "typecheck": "tsc --noEmit",
-    "test:fake": "tsx test/fake-meet.test.ts"
+    "test:fake": "tsx test/fake-meet.test.ts",
+    "transcript": "tsx src/phase0/transcript.ts",
+    "test:unit": "tsx test/finalizer.test.ts",
+    "test:dom": "tsx test/dom.test.ts"
   },
   "dependencies": {
     "playwright": "1.63.0"
