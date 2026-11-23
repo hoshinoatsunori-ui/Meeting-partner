@@ -3,3 +3,7 @@ node_modules/
 .profile/
 # 会議の発話内容を含むのでコミットしない
 logs/
+# API キーなどの秘密情報。絶対にコミットしない（見本は .env.example）
+.env
+.env.*
+!.env.example
