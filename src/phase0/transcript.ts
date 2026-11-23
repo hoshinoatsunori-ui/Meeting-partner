@@ -76,11 +76,12 @@ for (const r of records) {
 }
 finalizer.flush(lastT + 60_000);
 
-const t0 = records[0]?.t ?? 0;
 const utterances = order
   .map((k) => byKey.get(k)!)
   .filter((u) => u.text)
   .sort((a, b) => a.start - b.start);
+// 時刻は最初の発話からの経過（summarize.ts の根拠の時刻とそろえる）
+const t0 = utterances[0]?.start ?? 0;
 
 fs.writeFileSync(path.join(dir, "transcript.jsonl"), utterances.map((u) => JSON.stringify(u)).join("\n") + "\n");
 const mmss = (ms: number) => {
@@ -90,7 +91,7 @@ const mmss = (ms: number) => {
 const md = [
   `# 発話ログ（${path.basename(dir)}）`,
   "",
-  `確定待ち ${finalizeAfterMs} ms。時刻は記録開始からの経過。`,
+  `確定待ち ${finalizeAfterMs} ms。時刻は最初の発話からの経過。`,
   "",
   ...utterances.map((u) => `- [${mmss(u.start)}] **${u.speaker}**: ${u.text}`),
   "",
